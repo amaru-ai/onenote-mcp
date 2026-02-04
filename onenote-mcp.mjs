@@ -20,12 +20,17 @@ const __dirname = path.dirname(__filename);
 // Path for storing the access token
 const tokenFilePath = path.join(__dirname, '.access-token.txt');
 
+// Request timeout in ms (set ONENOTE_REQUEST_TIMEOUT_MS in env to override; default 60s)
+const REQUEST_TIMEOUT_MS = process.env.ONENOTE_REQUEST_TIMEOUT_MS
+  ? parseInt(process.env.ONENOTE_REQUEST_TIMEOUT_MS, 10)
+  : 60_000;
+
 // Create the MCP server
 const server = new McpServer(
-  { 
+  {
     name: "onenote",
     version: "1.0.0",
-    description: "OneNote MCP Server" 
+    description: "OneNote MCP Server"
   },
   {
     capabilities: {
@@ -124,11 +129,11 @@ async function createGraphClient() {
     try {
       // Get an access token using device code flow
       const tokenResponse = await credential.getToken(scopes);
-      
+
       // Save the token for future use
       accessToken = tokenResponse.token;
       fs.writeFileSync(tokenFilePath, JSON.stringify({ token: accessToken }));
-      
+
       // Initialize Graph client with the token
       graphClient = Client.initWithMiddleware({
         authProvider: {
@@ -137,7 +142,7 @@ async function createGraphClient() {
           }
         }
       });
-      
+
       return { type: 'device_code', client: graphClient };
     } catch (error) {
       console.error('Authentication error:', error);
@@ -154,7 +159,7 @@ server.tool(
     try {
       const result = await createGraphClient();
       if (result.type === 'device_code') {
-        return { 
+        return {
           content: [
             {
               type: "text",
@@ -163,7 +168,7 @@ server.tool(
           ]
         };
       } else {
-        return { 
+        return {
           content: [
             {
               type: "text",
@@ -190,7 +195,7 @@ server.tool(
       const tokenData = JSON.stringify({ token: accessToken });
       fs.writeFileSync(tokenFilePath, tokenData);
       await createGraphClient();
-      return { 
+      return {
         content: [
           {
             type: "text",
@@ -237,11 +242,15 @@ server.tool(
     try {
       await ensureGraphClient();
       const response = await graphClient.api(`/me/onenote/notebooks`).get();
-      return { 
+      const notebook = response.value.find(n => n.displayName && n.displayName.toLowerCase().includes("lewis's notebook"));
+      if (!notebook) {
+        throw new Error('No notebook with "lewis" in the display name found');
+      }
+      return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(response.value[0])
+            text: JSON.stringify(notebook)
           }
         ]
       };
@@ -260,7 +269,7 @@ server.tool(
     try {
       await ensureGraphClient();
       const response = await graphClient.api(`/me/onenote/sections`).get();
-      return { 
+      return {
         content: [
           {
             type: "text",
@@ -278,35 +287,93 @@ server.tool(
 // Tool for listing pages in a section
 server.tool(
   "listPages",
-  "List all pages in a section",
+  "List all pages in a section. Supports pagination: use fetchAll to get every page, or use top + the returned nextLink to get the next page.",
+  {
+    sectionId: {
+      type: "string",
+      description: "The ID of the section to list pages from. If not provided, uses the first section found."
+    },
+    top: {
+      type: "number",
+      description: "Page size (e.g. 20). Default is API default (~20). Use with nextLink for manual pagination."
+    },
+    nextLink: {
+      type: "string",
+      description: "The @odata.nextLink from a previous listPages response to fetch the next page of results."
+    },
+    fetchAll: {
+      type: "boolean",
+      description: "If true, follow all pages and return every page in one response. Default false."
+    }
+  },
   async (params) => {
     try {
       await ensureGraphClient();
-      // Get sections first
-      const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
-      
-      if (sectionsResponse.value.length === 0) {
-        return { 
+
+      let sectionId = params.sectionId;
+      const top = params.top;
+      const nextLink = params.nextLink;
+      const fetchAll = params.fetchAll === true;
+
+      // If nextLink provided, request that page directly (no sectionId needed)
+      if (nextLink) {
+        const response = await graphClient.api(nextLink).get();
+        const value = response.value || [];
+        const hasMore = !!response["@odata.nextLink"];
+        const out = { value, nextLink: hasMore ? response["@odata.nextLink"] : undefined };
+        return {
+          content: [{ type: "text", text: JSON.stringify(out) }]
+        };
+      }
+
+      // If no section ID provided, get the first section
+      if (!sectionId) {
+        const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
+
+        if (sectionsResponse.value.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ value: [], nextLink: undefined })
+              }
+            ]
+          };
+        }
+
+        sectionId = sectionsResponse.value[0].id;
+      }
+
+      let url = `/me/onenote/sections/${sectionId}/pages`;
+      if (top != null && top > 0) {
+        url += (url.includes("?") ? "&" : "?") + `$top=${Math.min(Math.floor(top), 999)}`;
+      }
+
+      let response = await graphClient.api(url).get();
+      let allValues = [...(response.value || [])];
+
+      if (fetchAll) {
+        while (response["@odata.nextLink"]) {
+          response = await graphClient.api(response["@odata.nextLink"]).get();
+          allValues = allValues.concat(response.value || []);
+        }
+        return {
           content: [
             {
               type: "text",
-              text: "[]"
+              text: JSON.stringify({ value: allValues, nextLink: undefined })
             }
           ]
         };
       }
-      
-      // Use the first section
-      const sectionId = sectionsResponse.value[0].id;
-      const response = await graphClient.api(`/me/onenote/sections/${sectionId}/pages`).get();
-      
-      return { 
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(response.value)
-          }
-        ]
+
+      const hasMore = !!response["@odata.nextLink"];
+      const out = {
+        value: allValues,
+        nextLink: hasMore ? response["@odata.nextLink"] : undefined
+      };
+      return {
+        content: [{ type: "text", text: JSON.stringify(out) }]
       };
     } catch (error) {
       console.error("Error listing pages:", error);
@@ -323,33 +390,33 @@ server.tool(
     try {
       console.error("GetPage called with params:", params);
       await ensureGraphClient();
-      
+
       // First, list all pages to find the one we want
       const pagesResponse = await graphClient.api('/me/onenote/pages').get();
       console.error("Got", pagesResponse.value.length, "pages");
-      
+
       let targetPage;
-      
+
       // If a page ID is provided, use it to find the page
       if (params.random_string && params.random_string.length > 0) {
         const pageId = params.random_string;
         console.error("Looking for page with ID:", pageId);
-        
+
         // Look for exact match first
         targetPage = pagesResponse.value.find(p => p.id === pageId);
-        
+
         // If no exact match, try matching by title
         if (!targetPage) {
           console.error("No exact match, trying title search");
-          targetPage = pagesResponse.value.find(p => 
+          targetPage = pagesResponse.value.find(p =>
             p.title && p.title.toLowerCase().includes(params.random_string.toLowerCase())
           );
         }
-        
+
         // If still no match, try partial ID match
         if (!targetPage) {
           console.error("No title match, trying partial ID match");
-          targetPage = pagesResponse.value.find(p => 
+          targetPage = pagesResponse.value.find(p =>
             p.id.includes(pageId) || pageId.includes(p.id)
           );
         }
@@ -358,32 +425,36 @@ server.tool(
         console.error("No ID provided, using first page");
         targetPage = pagesResponse.value[0];
       }
-      
+
       if (!targetPage) {
         throw new Error("Page not found");
       }
-      
+
       console.error("Target page found:", targetPage.title);
       console.error("Page ID:", targetPage.id);
-      
+
       try {
         const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${targetPage.id}/content`;
         console.error("Fetching content from:", url);
-        
-        // Make direct HTTP request with fetch
+
+        // Make direct HTTP request with fetch (with configurable timeout)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         const response = await fetch(url, {
           headers: {
             'Authorization': `Bearer ${accessToken}`
-          }
+          },
+          signal: controller.signal
         });
-        
+        clearTimeout(timeoutId);
+
         if (!response.ok) {
           throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}`);
         }
-        
+
         const content = await response.text();
         console.error(`Content received! Length: ${content.length} characters`);
-        
+
         // Return the raw HTML content
         return {
           content: [
@@ -395,7 +466,7 @@ server.tool(
         };
       } catch (error) {
         console.error("Error getting content:", error);
-        
+
         // Return a simple error message
         return {
           content: [
@@ -429,14 +500,14 @@ server.tool(
       await ensureGraphClient();
       // Get sections first
       const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
-      
+
       if (sectionsResponse.value.length === 0) {
         throw new Error("No sections found");
       }
-      
+
       // Use the first section
       const sectionId = sectionsResponse.value[0].id;
-      
+
       // Create simple HTML content
       const simpleHtml = `
         <!DOCTYPE html>
@@ -449,13 +520,13 @@ server.tool(
           </body>
         </html>
       `;
-      
+
       const response = await graphClient
         .api(`/me/onenote/sections/${sectionId}/pages`)
         .header("Content-Type", "application/xhtml+xml")
         .post(simpleHtml);
-      
-      return { 
+
+      return {
         content: [
           {
             type: "text",
@@ -474,25 +545,44 @@ server.tool(
 server.tool(
   "searchPages",
   "Search for pages across notebooks",
+  {
+    searchTerm: {
+      type: "string",
+      description: "The search term to filter pages by title. If not provided, returns all pages."
+    },
+    sectionId: {
+      type: "string",
+      description: "The ID of the section to search within. If not provided, searches all sections."
+    }
+  },
   async (params) => {
     try {
       await ensureGraphClient();
-      
-      // Get all pages
-      const response = await graphClient.api(`/me/onenote/pages`).get();
-      
-      // If search string is provided, filter the results
-      if (params.random_string && params.random_string.length > 0) {
-        const searchTerm = params.random_string.toLowerCase();
-        const filteredPages = response.value.filter(page => {
+
+      let pages;
+
+      // If a section ID is provided, get pages from that section only
+      if (params.sectionId) {
+        const response = await graphClient.api(`/me/onenote/sections/${params.sectionId}/pages`).get();
+        pages = response.value;
+      } else {
+        // Get all pages across all sections
+        const response = await graphClient.api(`/me/onenote/pages`).get();
+        pages = response.value;
+      }
+
+      // If search term is provided, filter the results
+      if (params.searchTerm && params.searchTerm.length > 0) {
+        const searchTerm = params.searchTerm.toLowerCase();
+        const filteredPages = pages.filter(page => {
           // Search in title
           if (page.title && page.title.toLowerCase().includes(searchTerm)) {
             return true;
           }
           return false;
         });
-        
-        return { 
+
+        return {
           content: [
             {
               type: "text",
@@ -502,11 +592,11 @@ server.tool(
         };
       } else {
         // Return all pages if no search term
-        return { 
+        return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(response.value)
+              text: JSON.stringify(pages)
             }
           ]
         };
@@ -524,11 +614,11 @@ async function main() {
     // Connect to standard I/O
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    
+
     console.error('Server started successfully.');
     console.error('Use the "authenticate" tool to start the authentication flow,');
     console.error('or use "saveAccessToken" if you already have a token.');
-    
+
     // Keep the process alive
     process.on('SIGINT', () => {
       process.exit(0);
@@ -539,4 +629,4 @@ async function main() {
   }
 }
 
-main(); 
+main();

@@ -77,6 +77,10 @@ The first time you ask about OneNote, the AI will guide you through the authenti
    
 4. You can now ask Claude to interact with your OneNote data
 
+### Configuration
+
+- **`ONENOTE_REQUEST_TIMEOUT_MS`** – Timeout in milliseconds for outgoing requests (e.g. fetching page content). Default is 60000 (60 seconds). Increase if you hit timeouts on slow or large pages. Example in Cursor MCP config: `"env": { "ONENOTE_REQUEST_TIMEOUT_MS": "120000" }`.
+
 ## Features
 
 - Authentication with Microsoft OneNote using device code flow (no Azure setup needed)

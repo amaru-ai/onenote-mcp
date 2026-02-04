@@ -20,7 +20,7 @@ async function createPage() {
 
     const tokenData = fs.readFileSync(tokenFilePath, 'utf8');
     let accessToken;
-    
+
     try {
       // Try to parse as JSON first (new format)
       const parsedToken = JSON.parse(tokenData);
@@ -45,20 +45,24 @@ async function createPage() {
     // First, get all notebooks
     console.log('Fetching notebooks...');
     const notebooksResponse = await client.api('/me/onenote/notebooks').get();
-    
+
     if (notebooksResponse.value.length === 0) {
       console.log('No notebooks found.');
       return;
     }
 
-    // Use the first notebook (you can modify this to select a specific notebook)
-    const notebook = notebooksResponse.value[0];
+    // Use notebook with "lewis" in the display name
+    const notebook = notebooksResponse.value.find(n => n.displayName && n.displayName.toLowerCase().includes("lewis's notebook"));
+    if (!notebook) {
+      console.log('No notebook with "lewis" in the display name found.');
+      return;
+    }
     console.log(`Using notebook: "${notebook.displayName}"`);
 
     // Get sections in the selected notebook
     console.log(`Fetching sections in "${notebook.displayName}" notebook...`);
     const sectionsResponse = await client.api(`/me/onenote/notebooks/${notebook.id}/sections`).get();
-    
+
     if (sectionsResponse.value.length === 0) {
       console.log('No sections found in this notebook.');
       return;
@@ -70,12 +74,12 @@ async function createPage() {
 
     // Create a new page
     console.log(`Creating a new page in "${section.displayName}" section...`);
-    
+
     // Current date and time
     const now = new Date();
     const formattedDate = now.toISOString().split('T')[0];
     const formattedTime = now.toLocaleTimeString();
-    
+
     // Create simple HTML content
     const simpleHtml = `
       <!DOCTYPE html>
@@ -95,12 +99,12 @@ async function createPage() {
         </body>
       </html>
     `;
-    
+
     const response = await client
       .api(`/me/onenote/sections/${section.id}/pages`)
       .header("Content-Type", "application/xhtml+xml")
       .post(simpleHtml);
-    
+
     console.log(`\nNew page created successfully:`);
     console.log(`Title: ${response.title}`);
     console.log(`Created: ${new Date(response.createdDateTime).toLocaleString()}`);
@@ -112,4 +116,4 @@ async function createPage() {
 }
 
 // Run the function
-createPage(); 
+createPage();
