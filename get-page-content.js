@@ -17,6 +17,29 @@ if (!pageId) {
   process.exit(1);
 }
 
+// Function to check if page should be skipped
+function shouldSkipPage(page) {
+  const title = (page.title || '').toLowerCase();
+
+  // Check if title contains "private" or "(old)"
+  if (title.includes('private') || title.includes('(old)')) {
+    console.log(`Skipping page: Title contains excluded keyword: "${page.title}"`);
+    return true;
+  }
+
+  // Check if last modified date is older than 2022/1/1
+  if (page.lastModifiedDateTime) {
+    const lastModified = new Date(page.lastModifiedDateTime);
+    const cutoffDate = new Date('2022-01-01');
+    if (lastModified < cutoffDate) {
+      console.log(`Skipping page: Last modified date (${lastModified.toISOString()}) is older than 2022/1/1`);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function getPageContent() {
   try {
     // Read the access token
@@ -53,6 +76,12 @@ async function getPageContent() {
     console.log(`Fetching page with ID: "${pageId}"...`);
     const page = await client.api(`/me/onenote/pages/${pageId}`).get();
     console.log(`Found page: "${page.title}" (ID: ${page.id})`);
+
+    // Check if page should be skipped
+    if (shouldSkipPage(page)) {
+      console.log('Page will not be downloaded due to filtering rules.');
+      return;
+    }
 
     // Fetch the content using the /content endpoint
     console.log('\nFetching page content...');

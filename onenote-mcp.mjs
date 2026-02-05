@@ -400,10 +400,31 @@ server.tool(
   }
 );
 
+// Helper function to check if page should be skipped
+function shouldSkipPage(page) {
+  const title = (page.title || '').toLowerCase();
+
+  // Check if title contains "private" or "(old)"
+  if (title.includes('private') || title.includes('(old)')) {
+    return { skip: true, reason: `Title contains excluded keyword: "${page.title}"` };
+  }
+
+  // Check if last modified date is older than 2022/1/1
+  if (page.lastModifiedDateTime) {
+    const lastModified = new Date(page.lastModifiedDateTime);
+    const cutoffDate = new Date('2022-01-01');
+    if (lastModified < cutoffDate) {
+      return { skip: true, reason: `Last modified date (${lastModified.toISOString()}) is older than 2022/1/1` };
+    }
+  }
+
+  return { skip: false };
+}
+
 // Tool for getting the content of a page
 server.tool(
   "getPage",
-  "Get the content of a page by page ID",
+  "Get the content of a page by page ID. Skips pages with 'private' or '(old)' in title, or pages last modified before 2022/1/1.",
   {
     pageId: {
       type: "string",
@@ -426,6 +447,20 @@ server.tool(
       const page = await graphClient.api(`/me/onenote/pages/${pageId}`).get();
       console.error("Target page found:", page.title);
       console.error("Page ID:", page.id);
+
+      // Check if page should be skipped
+      const skipCheck = shouldSkipPage(page);
+      if (skipCheck.skip) {
+        console.error(`Skipping page: ${skipCheck.reason}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Page skipped: ${skipCheck.reason}`
+            }
+          ]
+        };
+      }
 
       // Fetch the content using direct HTTP request (with configurable timeout)
       const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${pageId}/content`;
@@ -467,7 +502,7 @@ server.tool(
 // Tool for getting page content using Graph client (alternative method)
 server.tool(
   "getPageContent",
-  "Get the content of a page using the Graph API client method",
+  "Get the content of a page using the Graph API client method. Skips pages with 'private' or '(old)' in title, or pages last modified before 2022/1/1.",
   {
     pageId: {
       type: "string",
@@ -490,6 +525,20 @@ server.tool(
       const page = await graphClient.api(`/me/onenote/pages/${pageId}`).get();
       console.error("Found page:", page.title);
 
+      // Check if page should be skipped
+      const skipCheck = shouldSkipPage(page);
+      if (skipCheck.skip) {
+        console.error(`Skipping page: ${skipCheck.reason}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Page skipped: ${skipCheck.reason}`
+            }
+          ]
+        };
+      }
+
       // Fetch the content using the /content endpoint with Accept header
       console.error("Fetching page content...");
       const content = await graphClient.api(`/me/onenote/pages/${pageId}/content`)
@@ -511,6 +560,97 @@ server.tool(
     } catch (error) {
       console.error("Error in getPageContent:", error);
       throw new Error(`Failed to get page content: ${error.message}`);
+    }
+  }
+);
+
+// Tool for downloading page content to a file
+server.tool(
+  "downloadFile",
+  "Download page content to a specified file path. Skips pages with 'private' or '(old)' in title, or pages last modified before 2022/1/1.",
+  {
+    pageId: {
+      type: "string",
+      description: "The ID of the page to download"
+    },
+    filePath: {
+      type: "string",
+      description: "The absolute file path where the page content should be saved"
+    }
+  },
+  async (params) => {
+    try {
+      console.error("DownloadFile called with params:", params);
+      await ensureGraphClient();
+
+      const pageId = params.pageId;
+      const filePath = params.filePath;
+
+      if (!pageId) {
+        throw new Error("Page ID is required");
+      }
+      if (!filePath) {
+        throw new Error("File path is required");
+      }
+
+      console.error("Fetching page with ID:", pageId);
+
+      // First get page metadata to verify it exists and get the title
+      const page = await graphClient.api(`/me/onenote/pages/${pageId}`).get();
+      console.error("Target page found:", page.title);
+      console.error("Page ID:", page.id);
+
+      // Check if page should be skipped
+      const skipCheck = shouldSkipPage(page);
+      if (skipCheck.skip) {
+        console.error(`Skipping page: ${skipCheck.reason}`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Page skipped: ${skipCheck.reason}`
+            }
+          ]
+        };
+      }
+
+      // Fetch the content using direct HTTP request (with configurable timeout)
+      const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${pageId}/content`;
+      console.error("Fetching content from:", url);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}`);
+      }
+
+      const content = await response.text();
+      console.error(`Content received! Length: ${content.length} characters`);
+
+      // Save to file
+      fs.writeFileSync(filePath, content, 'utf8');
+      console.error(`Content saved to: ${filePath}`);
+
+      // Return success message
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Page "${page.title}" successfully downloaded to ${filePath} (${content.length} characters)`
+          }
+        ]
+      };
+    } catch (error) {
+      console.error("Error in downloadFile:", error);
+      throw new Error(`Failed to download file: ${error.message}`);
     }
   }
 );
