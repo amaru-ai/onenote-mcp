@@ -10,20 +10,21 @@ const __dirname = path.dirname(__filename);
 // Path for storing the access token
 const tokenFilePath = path.join(__dirname, '.access-token.txt');
 
-// Parse CLI args: --top=20, --next-link="url", --fetch-all
+// Parse CLI args: --top=20, --next-link="url", --fetch-all, --section-id="id"
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { top: null, nextLink: null, fetchAll: false };
+  const opts = { top: null, nextLink: null, fetchAll: false, sectionId: null };
   for (const arg of args) {
     if (arg === '--fetch-all') opts.fetchAll = true;
     else if (arg.startsWith('--top=')) opts.top = parseInt(arg.slice(6), 10);
     else if (arg.startsWith('--next-link=')) opts.nextLink = arg.slice(12).replace(/^["']|["']$/g, '');
+    else if (arg.startsWith('--section-id=')) opts.sectionId = arg.slice(13).replace(/^["']|["']$/g, '');
   }
   return opts;
 }
 
 async function listPages() {
-  const { top, nextLink, fetchAll } = parseArgs();
+  const { top, nextLink, fetchAll, sectionId } = parseArgs();
 
   try {
     // Read the access token
@@ -49,11 +50,12 @@ async function listPages() {
       return;
     }
 
-    // Create Microsoft Graph client
+    // Create Microsoft Graph client with extended timeout
     const client = Client.init({
       authProvider: (done) => {
         done(null, accessToken);
-      }
+      },
+      defaultTimeout: 180000 // 3 minutes (180 seconds) instead of default 30 seconds
     });
 
     if (nextLink) {
@@ -85,7 +87,46 @@ async function listPages() {
       return;
     }
 
-    // No nextLink: get notebook and iterate all sections
+    // If section ID is provided, fetch pages for that section only
+    if (sectionId) {
+      console.log(`Fetching section information for ID: ${sectionId}...`);
+      const section = await client.api(`/me/onenote/sections/${sectionId}`).get();
+      console.log(`\n${section.displayName} -- ${section.id}\n`);
+
+      let url = `/me/onenote/sections/${sectionId}/pages`;
+      if (top != null && top > 0) {
+        url += `?$top=${Math.min(Math.floor(top), 999)}`;
+      }
+      let pagesResponse = await client.api(url).get();
+      let allPages = [...(pagesResponse.value || [])];
+
+      if (fetchAll && pagesResponse['@odata.nextLink']) {
+        let response = pagesResponse;
+        while (response['@odata.nextLink']) {
+          response = await client.api(response['@odata.nextLink']).get();
+          allPages = allPages.concat(response.value || []);
+        }
+      }
+
+      console.log('Pages:');
+      console.log('=====================');
+      if (allPages.length === 0) {
+        console.log('No pages found.');
+      } else {
+        allPages.forEach((page, index) => {
+          console.log(`${index + 1}. ${page.title} (Created: ${new Date(page.createdDateTime).toLocaleString()}) -- ${page.id}`);
+        });
+      }
+
+      const next = fetchAll ? null : (pagesResponse['@odata.nextLink'] || null);
+      if (next) {
+        console.log('\nMore results available. Run with:');
+        console.log(`  node list-pages.js --section-id="${sectionId}" --next-link="${next}"`);
+      }
+      return;
+    }
+
+    // No nextLink or sectionId: get notebook and iterate all sections
     console.log('Fetching notebooks...');
     const notebooksResponse = await client.api('/me/onenote/notebooks').get();
 
