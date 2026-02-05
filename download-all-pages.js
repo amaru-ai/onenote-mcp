@@ -15,6 +15,7 @@ const OUTPUT_DIR = '/Users/lewisanderson/Library/CloudStorage/GoogleDrive-lewis@
 const FAILED_DOWNLOADS_FILE = '/Users/lewisanderson/Library/CloudStorage/GoogleDrive-lewis@amaru.ai/My Drive/Private - Lewis - Amaru/OneNoteExport/failed-downloads.txt';
 const MAX_CONSECUTIVE_FAILURES = 10;
 const REQUEST_TIMEOUT_MS = 60_000;
+const FAST_MODE_DAYS = 30; // Consider file "recent" if within this many days
 
 // Read access token
 const tokenFilePath = path.join(__dirname, '.access-token.txt');
@@ -77,9 +78,55 @@ function sanitizeFilename(filename) {
   return filename.replace(/[<>:"/\\|?*]/g, '_');
 }
 
+// Check if a recent file exists for this page title (for fast mode)
+function hasRecentFileByTitle(pageTitle, fastModeDays = FAST_MODE_DAYS) {
+  if (!fs.existsSync(OUTPUT_DIR)) {
+    return { found: false };
+  }
+
+  const sanitizedTitle = sanitizeFilename(pageTitle);
+  const files = fs.readdirSync(OUTPUT_DIR);
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - fastModeDays);
+
+  // Look for files matching pattern: {sanitizedTitle}--YYYYMMDD.html
+  const pattern = new RegExp(`^${sanitizedTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}--\\d{8}\\.html$`);
+
+  for (const file of files) {
+    if (pattern.test(file)) {
+      // Extract date from filename
+      const dateMatch = file.match(/--(\d{8})\.html$/);
+      if (dateMatch) {
+        const dateStr = dateMatch[1];
+        const year = parseInt(dateStr.substring(0, 4));
+        const month = parseInt(dateStr.substring(4, 6)) - 1;
+        const day = parseInt(dateStr.substring(6, 8));
+        const fileDate = new Date(year, month, day);
+
+        if (fileDate >= cutoffDate) {
+          return { found: true, filename: file, date: fileDate };
+        }
+      }
+    }
+  }
+
+  return { found: false };
+}
+
 // Download a single page
-async function downloadPage(pageId, pageTitle, retryCount = 0) {
+async function downloadPage(pageId, pageTitle, options = {}) {
+  const { fastMode = false, retryCount = 0 } = options;
+
   try {
+    // In fast mode, check if a recent file exists before fetching metadata
+    if (fastMode) {
+      const recentFile = hasRecentFileByTitle(pageTitle);
+      if (recentFile.found) {
+        console.log(`  ⏭️  Fast mode: Recent file exists (${recentFile.filename})`);
+        return { success: true, skipped: true, reason: 'fast mode - recent file exists' };
+      }
+    }
+
     console.log(`Fetching metadata for: ${pageTitle}`);
 
     // Get page metadata
@@ -135,7 +182,7 @@ async function downloadPage(pageId, pageTitle, retryCount = 0) {
   } catch (error) {
     if (retryCount < 1) {
       console.log(`  ⚠️  Error, retrying: ${error.message}`);
-      return await downloadPage(pageId, pageTitle, retryCount + 1);
+      return await downloadPage(pageId, pageTitle, { fastMode, retryCount: retryCount + 1 });
     } else {
       console.log(`  ❌ Failed after retry: ${error.message}`);
       return { success: false, error: error.message };
@@ -145,6 +192,15 @@ async function downloadPage(pageId, pageTitle, retryCount = 0) {
 
 // Main function
 async function main() {
+  // Parse command line arguments
+  const args = process.argv.slice(2);
+  const fastMode = args.includes('--fast');
+
+  if (fastMode) {
+    console.log(`⚡ Fast mode enabled: Skipping metadata fetch for pages with recent files (within ${FAST_MODE_DAYS} days)`);
+    console.log('');
+  }
+
   console.log('Reading page list...');
   const fileContent = fs.readFileSync(PAGE_LIST_FILE, 'utf8');
   const lines = fileContent.split('\n');
@@ -181,7 +237,7 @@ async function main() {
     const { title, pageId } = pagesToDownload[i];
     console.log(`[${i + 1}/${pagesToDownload.length}] ${title}`);
 
-    const result = await downloadPage(pageId, title);
+    const result = await downloadPage(pageId, title, { fastMode });
 
     if (result.success) {
       consecutiveFailures = 0;
