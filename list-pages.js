@@ -56,80 +56,92 @@ async function listPages() {
       }
     });
 
-    let pagesResponse;
-    let sectionDisplayName = '';
-
     if (nextLink) {
-      // Fetch next page using the link from a previous response
+      // Fetch next page using the link from a previous response (single-section pagination)
       console.log('Fetching next page...');
-      pagesResponse = await client.api(nextLink).get();
-    } else {
-      // First, get all notebooks
-      console.log('Fetching notebooks...');
-      const notebooksResponse = await client.api('/me/onenote/notebooks').get();
-
-      if (notebooksResponse.value.length === 0) {
-        console.log('No notebooks found.');
-        return;
+      const pagesResponse = await client.api(nextLink).get();
+      let allPages = [...(pagesResponse.value || [])];
+      if (fetchAll && pagesResponse['@odata.nextLink']) {
+        let response = pagesResponse;
+        while (response['@odata.nextLink']) {
+          response = await client.api(response['@odata.nextLink']).get();
+          allPages = allPages.concat(response.value || []);
+        }
       }
-
-      // Use notebook with "lewis" in the display name
-      const notebook = notebooksResponse.value.find(n => n.displayName && n.displayName.toLowerCase().includes("lewis's notebook"));
-      if (!notebook) {
-        console.log('No notebook with "lewis" in the display name found.');
-        return;
+      console.log('\nPages:');
+      console.log('=====================');
+      if (allPages.length === 0) {
+        console.log('No pages found.');
+      } else {
+        allPages.forEach((page, index) => {
+          console.log(`${index + 1}. ${page.title} (Created: ${new Date(page.createdDateTime).toLocaleString()}) -- ${page.id}`);
+        });
       }
-      console.log(`Using notebook: "${notebook.displayName}"`);
-
-      // Get sections in the selected notebook
-      console.log(`Fetching sections in "${notebook.displayName}" notebook...`);
-      const sectionsResponse = await client.api(`/me/onenote/notebooks/${notebook.id}/sections`).get();
-
-      if (sectionsResponse.value.length === 0) {
-        console.log('No sections found in this notebook.');
-        return;
+      const next = fetchAll ? null : (pagesResponse['@odata.nextLink'] || null);
+      if (next) {
+        console.log('\nMore results available. Run with:');
+        console.log(`  node list-pages.js --next-link="${next}"`);
       }
+      return;
+    }
 
-      // Use the first section (you can modify this to select a specific section)
-      const section = sectionsResponse.value[0];
-      sectionDisplayName = section.displayName;
-      console.log(`Using section: "${section.displayName}"`);
+    // No nextLink: get notebook and iterate all sections
+    console.log('Fetching notebooks...');
+    const notebooksResponse = await client.api('/me/onenote/notebooks').get();
 
-      // Get pages in the section
+    if (notebooksResponse.value.length === 0) {
+      console.log('No notebooks found.');
+      return;
+    }
+
+    const notebook = notebooksResponse.value.find(n => n.displayName && n.displayName.toLowerCase().includes("lewis's notebook"));
+    if (!notebook) {
+      console.log('No notebook with "lewis" in the display name found.');
+      return;
+    }
+    console.log(`Using notebook: "${notebook.displayName}"`);
+
+    console.log(`Fetching sections in "${notebook.displayName}" notebook...`);
+    const sectionsResponse = await client.api(`/me/onenote/notebooks/${notebook.id}/sections`).get();
+
+    if (sectionsResponse.value.length === 0) {
+      console.log('No sections found in this notebook.');
+      return;
+    }
+
+    const sections = sectionsResponse.value;
+
+    for (const section of sections) {
+      console.log(`\n\n${section.displayName} -- ${section.id}`);
+
       let url = `/me/onenote/sections/${section.id}/pages`;
       if (top != null && top > 0) {
         url += `?$top=${Math.min(Math.floor(top), 999)}`;
       }
-      console.log(`Fetching pages in "${section.displayName}" section...`);
-      pagesResponse = await client.api(url).get();
-    }
+      let pagesResponse = await client.api(url).get();
+      let allPages = [...(pagesResponse.value || [])];
 
-    let allPages = [...(pagesResponse.value || [])];
-
-    if (fetchAll && pagesResponse['@odata.nextLink']) {
-      let response = pagesResponse;
-      while (response['@odata.nextLink']) {
-        response = await client.api(response['@odata.nextLink']).get();
-        allPages = allPages.concat(response.value || []);
+      if (fetchAll && pagesResponse['@odata.nextLink']) {
+        let response = pagesResponse;
+        while (response['@odata.nextLink']) {
+          response = await client.api(response['@odata.nextLink']).get();
+          allPages = allPages.concat(response.value || []);
+        }
       }
-    }
 
-    // console.log(pagesResponse);
-    console.log(`\nPages${sectionDisplayName ? ` in ${sectionDisplayName}` : ''}:`);
-    console.log('=====================');
+      if (allPages.length === 0) {
+        console.log('No pages found.');
+      } else {
+        allPages.forEach((page, index) => {
+          console.log(`${index + 1}. ${page.title} (Created: ${new Date(page.createdDateTime).toLocaleString()}) -- ${page.id}`);
+        });
+      }
 
-    if (allPages.length === 0) {
-      console.log('No pages found.');
-    } else {
-      allPages.forEach((page, index) => {
-        console.log(`${index + 1}. ${page.title} (Created: ${new Date(page.createdDateTime).toLocaleString()})`);
-      });
-    }
-
-    const next = fetchAll ? null : (pagesResponse['@odata.nextLink'] || null);
-    if (next) {
-      console.log('\nMore results available. Run with:');
-      console.log(`  node list-pages.js --next-link="${next}"`);
+      const next = fetchAll ? null : (pagesResponse['@odata.nextLink'] || null);
+      if (next) {
+        console.log('\nMore results available. Run with:');
+        console.log(`  node list-pages.js --next-link="${next}"`);
+      }
     }
   } catch (error) {
     console.error('Error listing pages:', error);
