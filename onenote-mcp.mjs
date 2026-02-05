@@ -94,11 +94,12 @@ async function ensureGraphClient() {
       throw new Error("Access token not found. Please save access token first.");
     }
 
-    // Create Microsoft Graph client
+    // Create Microsoft Graph client with extended timeout
     graphClient = Client.init({
       authProvider: (done) => {
         done(null, accessToken);
-      }
+      },
+      defaultTimeout: 180000 // 3 minutes (180 seconds) instead of default 30 seconds
     });
   }
   return graphClient;
@@ -264,11 +265,28 @@ server.tool(
 // Tool for listing sections in a notebook
 server.tool(
   "listSections",
-  "List all sections in a notebook",
+  "List all sections in a notebook. If notebookId is provided, lists sections in that notebook. Otherwise, lists all sections.",
+  {
+    notebookId: {
+      type: "string",
+      description: "The ID of the notebook to list sections from. If not provided, lists all sections across all notebooks."
+    }
+  },
   async (params) => {
     try {
       await ensureGraphClient();
-      const response = await graphClient.api(`/me/onenote/sections`).get();
+
+      let response;
+      if (params.notebookId) {
+        // List sections in specific notebook
+        console.error(`Fetching sections in notebook: ${params.notebookId}`);
+        response = await graphClient.api(`/me/onenote/notebooks/${params.notebookId}/sections`).get();
+      } else {
+        // List all sections
+        console.error("Fetching all sections");
+        response = await graphClient.api(`/me/onenote/sections`).get();
+      }
+
       return {
         content: [
           {
@@ -385,108 +403,114 @@ server.tool(
 // Tool for getting the content of a page
 server.tool(
   "getPage",
-  "Get the content of a page",
+  "Get the content of a page by page ID",
+  {
+    pageId: {
+      type: "string",
+      description: "The ID of the page to retrieve content from"
+    }
+  },
   async (params) => {
     try {
       console.error("GetPage called with params:", params);
       await ensureGraphClient();
 
-      // First, list all pages to find the one we want
-      const pagesResponse = await graphClient.api('/me/onenote/pages').get();
-      console.error("Got", pagesResponse.value.length, "pages");
-
-      let targetPage;
-
-      // If a page ID is provided, use it to find the page
-      if (params.random_string && params.random_string.length > 0) {
-        const pageId = params.random_string;
-        console.error("Looking for page with ID:", pageId);
-
-        // Look for exact match first
-        targetPage = pagesResponse.value.find(p => p.id === pageId);
-
-        // If no exact match, try matching by title
-        if (!targetPage) {
-          console.error("No exact match, trying title search");
-          targetPage = pagesResponse.value.find(p =>
-            p.title && p.title.toLowerCase().includes(params.random_string.toLowerCase())
-          );
-        }
-
-        // If still no match, try partial ID match
-        if (!targetPage) {
-          console.error("No title match, trying partial ID match");
-          targetPage = pagesResponse.value.find(p =>
-            p.id.includes(pageId) || pageId.includes(p.id)
-          );
-        }
-      } else {
-        // If no ID provided, use the first page
-        console.error("No ID provided, using first page");
-        targetPage = pagesResponse.value[0];
+      const pageId = params.pageId;
+      if (!pageId) {
+        throw new Error("Page ID is required");
       }
 
-      if (!targetPage) {
-        throw new Error("Page not found");
+      console.error("Fetching page with ID:", pageId);
+
+      // First get page metadata to verify it exists and get the title
+      const page = await graphClient.api(`/me/onenote/pages/${pageId}`).get();
+      console.error("Target page found:", page.title);
+      console.error("Page ID:", page.id);
+
+      // Fetch the content using direct HTTP request (with configurable timeout)
+      const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${pageId}/content`;
+      console.error("Fetching content from:", url);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}`);
       }
 
-      console.error("Target page found:", targetPage.title);
-      console.error("Page ID:", targetPage.id);
+      const content = await response.text();
+      console.error(`Content received! Length: ${content.length} characters`);
 
-      try {
-        const url = `https://graph.microsoft.com/v1.0/me/onenote/pages/${targetPage.id}/content`;
-        console.error("Fetching content from:", url);
-
-        // Make direct HTTP request with fetch (with configurable timeout)
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-        const response = await fetch(url, {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          },
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status} ${response.statusText}`);
-        }
-
-        const content = await response.text();
-        console.error(`Content received! Length: ${content.length} characters`);
-
-        // Return the raw HTML content
-        return {
-          content: [
-            {
-              type: "text",
-              text: content
-            }
-          ]
-        };
-      } catch (error) {
-        console.error("Error getting content:", error);
-
-        // Return a simple error message
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error retrieving page content: ${error.message}`
-            }
-          ]
-        };
-      }
-    } catch (error) {
-      console.error("Error in getPage:", error);
+      // Return the raw HTML content
       return {
         content: [
           {
             type: "text",
-            text: `Error in getPage: ${error.message}`
+            text: content
           }
         ]
       };
+    } catch (error) {
+      console.error("Error in getPage:", error);
+      throw new Error(`Failed to get page: ${error.message}`);
+    }
+  }
+);
+
+// Tool for getting page content using Graph client (alternative method)
+server.tool(
+  "getPageContent",
+  "Get the content of a page using the Graph API client method",
+  {
+    pageId: {
+      type: "string",
+      description: "The ID of the page to retrieve content from"
+    }
+  },
+  async (params) => {
+    try {
+      console.error("GetPageContent called with params:", params);
+      await ensureGraphClient();
+
+      const pageId = params.pageId;
+      if (!pageId) {
+        throw new Error("Page ID is required");
+      }
+
+      console.error("Fetching page with ID:", pageId);
+
+      // Get page metadata
+      const page = await graphClient.api(`/me/onenote/pages/${pageId}`).get();
+      console.error("Found page:", page.title);
+
+      // Fetch the content using the /content endpoint with Accept header
+      console.error("Fetching page content...");
+      const content = await graphClient.api(`/me/onenote/pages/${pageId}/content`)
+        .header('Accept', 'text/html')
+        .get();
+
+      const contentString = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+      console.error(`Content received! Length: ${contentString.length} characters`);
+
+      // Return the content
+      return {
+        content: [
+          {
+            type: "text",
+            text: contentString
+          }
+        ]
+      };
+    } catch (error) {
+      console.error("Error in getPageContent:", error);
+      throw new Error(`Failed to get page content: ${error.message}`);
     }
   }
 );
@@ -494,37 +518,69 @@ server.tool(
 // Tool for creating a new page in a section
 server.tool(
   "createPage",
-  "Create a new page in a section",
+  "Create a new page in a section with specified title and content",
+  {
+    sectionId: {
+      type: "string",
+      description: "The ID of the section to create the page in. If not provided, uses the first section found."
+    },
+    title: {
+      type: "string",
+      description: "The title of the new page. Defaults to 'New Page'."
+    },
+    content: {
+      type: "string",
+      description: "The HTML body content of the page. If not provided, creates a simple default page."
+    }
+  },
   async (params) => {
     try {
       await ensureGraphClient();
-      // Get sections first
-      const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
 
-      if (sectionsResponse.value.length === 0) {
-        throw new Error("No sections found");
+      let sectionId = params.sectionId;
+
+      // If no section ID provided, use the first section
+      if (!sectionId) {
+        const sectionsResponse = await graphClient.api(`/me/onenote/sections`).get();
+        if (sectionsResponse.value.length === 0) {
+          throw new Error("No sections found");
+        }
+        sectionId = sectionsResponse.value[0].id;
+        console.error(`Using first section: ${sectionsResponse.value[0].displayName}`);
       }
 
-      // Use the first section
-      const sectionId = sectionsResponse.value[0].id;
+      const title = params.title || "New Page";
+      const now = new Date();
+      const formattedDate = now.toISOString().split('T')[0];
+      const formattedTime = now.toLocaleTimeString();
 
-      // Create simple HTML content
-      const simpleHtml = `
+      // Use provided content or create default content
+      const bodyContent = params.content || `
+        <h1>${title}</h1>
+        <p>This page was created via the Microsoft Graph API at ${formattedTime} on ${formattedDate}.</p>
+      `;
+
+      // Create HTML content
+      const htmlContent = `
         <!DOCTYPE html>
         <html>
           <head>
-            <title>New Page</title>
+            <title>${title}</title>
           </head>
           <body>
-            <p>This is a new page created via the Microsoft Graph API</p>
+            ${bodyContent}
           </body>
         </html>
       `;
 
+      console.error(`Creating page "${title}" in section ${sectionId}`);
+
       const response = await graphClient
         .api(`/me/onenote/sections/${sectionId}/pages`)
         .header("Content-Type", "application/xhtml+xml")
-        .post(simpleHtml);
+        .post(htmlContent);
+
+      console.error(`Page created successfully: ${response.title}`);
 
       return {
         content: [
@@ -544,7 +600,7 @@ server.tool(
 // Tool for searching pages
 server.tool(
   "searchPages",
-  "Search for pages across notebooks",
+  "Search for pages by title across all sections or within a specific section. Fetches all pages automatically.",
   {
     searchTerm: {
       type: "string",
@@ -559,28 +615,34 @@ server.tool(
     try {
       await ensureGraphClient();
 
-      let pages;
+      const apiUrl = params.sectionId
+        ? `/me/onenote/sections/${params.sectionId}/pages`
+        : '/me/onenote/pages';
 
-      // If a section ID is provided, get pages from that section only
-      if (params.sectionId) {
-        const response = await graphClient.api(`/me/onenote/sections/${params.sectionId}/pages`).get();
-        pages = response.value;
-      } else {
-        // Get all pages across all sections
-        const response = await graphClient.api(`/me/onenote/pages`).get();
-        pages = response.value;
+      console.error(`Searching pages${params.sectionId ? ` in section ${params.sectionId}` : ' across all sections'}`);
+
+      // Get all pages by following pagination links
+      let response = await graphClient.api(apiUrl).get();
+      let pages = response.value || [];
+
+      // Follow all nextLinks to get all pages
+      while (response['@odata.nextLink']) {
+        console.error(`Fetching next page of results...`);
+        response = await graphClient.api(response['@odata.nextLink']).get();
+        pages = pages.concat(response.value || []);
       }
 
+      console.error(`Retrieved ${pages.length} total pages`);
+
       // If search term is provided, filter the results
-      if (params.searchTerm && params.searchTerm.length > 0) {
+      if (params.searchTerm && params.searchTerm.trim().length > 0) {
         const searchTerm = params.searchTerm.toLowerCase();
         const filteredPages = pages.filter(page => {
           // Search in title
-          if (page.title && page.title.toLowerCase().includes(searchTerm)) {
-            return true;
-          }
-          return false;
+          return page.title && page.title.toLowerCase().includes(searchTerm);
         });
+
+        console.error(`Filtered to ${filteredPages.length} pages matching "${params.searchTerm}"`);
 
         return {
           content: [

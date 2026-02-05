@@ -63,13 +63,31 @@ async function listPages() {
       console.log('Fetching next page...');
       const pagesResponse = await client.api(nextLink).get();
       let allPages = [...(pagesResponse.value || [])];
+
       if (fetchAll && pagesResponse['@odata.nextLink']) {
         let response = pagesResponse;
+        let batchNum = 1;
+        console.log(`Batch 1: Fetched ${allPages.length} pages`);
+
         while (response['@odata.nextLink']) {
-          response = await client.api(response['@odata.nextLink']).get();
-          allPages = allPages.concat(response.value || []);
+          batchNum++;
+          try {
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            response = await client.api(response['@odata.nextLink']).get();
+            const newPages = response.value || [];
+            allPages = allPages.concat(newPages);
+            console.log(`Batch ${batchNum}: Fetched ${newPages.length} pages (total: ${allPages.length})`);
+          } catch (error) {
+            console.error(`Error fetching batch ${batchNum}:`, error.message);
+            console.log(`Continuing with ${allPages.length} pages fetched so far...`);
+            break;
+          }
         }
+        console.log(`\nCompleted! Fetched ${allPages.length} total pages in ${batchNum} batches`);
       }
+
       console.log('\nPages:');
       console.log('=====================');
       if (allPages.length === 0) {
@@ -102,13 +120,29 @@ async function listPages() {
 
       if (fetchAll && pagesResponse['@odata.nextLink']) {
         let response = pagesResponse;
+        let batchNum = 1;
+        console.log(`Batch 1: Fetched ${allPages.length} pages`);
+
         while (response['@odata.nextLink']) {
-          response = await client.api(response['@odata.nextLink']).get();
-          allPages = allPages.concat(response.value || []);
+          batchNum++;
+          try {
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            response = await client.api(response['@odata.nextLink']).get();
+            const newPages = response.value || [];
+            allPages = allPages.concat(newPages);
+            console.log(`Batch ${batchNum}: Fetched ${newPages.length} pages (total: ${allPages.length})`);
+          } catch (error) {
+            console.error(`Error fetching batch ${batchNum}:`, error.message);
+            console.log(`Continuing with ${allPages.length} pages fetched so far...`);
+            break;
+          }
         }
+        console.log(`\nCompleted! Fetched ${allPages.length} total pages in ${batchNum} batches`);
       }
 
-      console.log('Pages:');
+      console.log('\nPages:');
       console.log('=====================');
       if (allPages.length === 0) {
         console.log('No pages found.');
@@ -164,9 +198,27 @@ async function listPages() {
 
       if (fetchAll && pagesResponse['@odata.nextLink']) {
         let response = pagesResponse;
+        let batchNum = 1;
+        console.log(`  Batch 1: Fetched ${allPages.length} pages`);
+
         while (response['@odata.nextLink']) {
-          response = await client.api(response['@odata.nextLink']).get();
-          allPages = allPages.concat(response.value || []);
+          batchNum++;
+          try {
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            response = await client.api(response['@odata.nextLink']).get();
+            const newPages = response.value || [];
+            allPages = allPages.concat(newPages);
+            console.log(`  Batch ${batchNum}: Fetched ${newPages.length} pages (total: ${allPages.length})`);
+          } catch (error) {
+            console.error(`  Error fetching batch ${batchNum}:`, error.message);
+            console.log(`  Continuing with ${allPages.length} pages fetched so far...`);
+            break;
+          }
+        }
+        if (batchNum > 1) {
+          console.log(`  Completed! Fetched ${allPages.length} total pages in ${batchNum} batches`);
         }
       }
 
