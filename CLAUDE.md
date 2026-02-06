@@ -15,6 +15,7 @@ You have full read and write access to the following directories:
 ## Tool Permissions
 
 You are authorized to:
+- **WebSearch**: Use web search whenever it would help answer questions, gather current information, or research topics - no confirmation needed
 - Read any files in the above directories using the Read tool
 - Write new files in the above directories using the Write tool
 - Edit existing files in the above directories using the Edit tool

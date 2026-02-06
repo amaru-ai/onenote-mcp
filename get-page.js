@@ -47,12 +47,12 @@ function shouldSkipPage(page) {
     return true;
   }
 
-  // Check if last modified date is older than 2022/1/1
+  // Check if last modified date is older than 2016/1/1
   if (page.lastModifiedDateTime) {
     const lastModified = new Date(page.lastModifiedDateTime);
-    const cutoffDate = new Date('2022-01-01');
+    const cutoffDate = new Date('2016-01-01');
     if (lastModified < cutoffDate) {
-      console.log(`Skipping page: Last modified date (${lastModified.toISOString()}) is older than 2022/1/1`);
+      console.log(`Skipping page: Last modified date (${lastModified.toISOString()}) is older than 2016/1/1`);
       return true;
     }
   }
@@ -134,4 +134,4 @@ async function getPageContent() {
 }
 
 // Run the function
-getPageContent(); 
+getPageContent();

@@ -409,12 +409,12 @@ function shouldSkipPage(page) {
     return { skip: true, reason: `Title contains excluded keyword: "${page.title}"` };
   }
 
-  // Check if last modified date is older than 2022/1/1
+  // Check if last modified date is older than 2016/1/1
   if (page.lastModifiedDateTime) {
     const lastModified = new Date(page.lastModifiedDateTime);
-    const cutoffDate = new Date('2022-01-01');
+    const cutoffDate = new Date('2016-01-01');
     if (lastModified < cutoffDate) {
-      return { skip: true, reason: `Last modified date (${lastModified.toISOString()}) is older than 2022/1/1` };
+      return { skip: true, reason: `Last modified date (${lastModified.toISOString()}) is older than 2016/1/1` };
     }
   }
 
@@ -424,7 +424,7 @@ function shouldSkipPage(page) {
 // Tool for getting the content of a page
 server.tool(
   "getPage",
-  "Get the content of a page by page ID. Skips pages with 'private' or '(old)' in title, or pages last modified before 2022/1/1.",
+  "Get the content of a page by page ID. Skips pages with 'private' or '(old)' in title, or pages last modified before 2016/1/1.",
   {
     pageId: {
       type: "string",
@@ -502,7 +502,7 @@ server.tool(
 // Tool for getting page content using Graph client (alternative method)
 server.tool(
   "getPageContent",
-  "Get the content of a page using the Graph API client method. Skips pages with 'private' or '(old)' in title, or pages last modified before 2022/1/1.",
+  "Get the content of a page using the Graph API client method. Skips pages with 'private' or '(old)' in title, or pages last modified before 2016/1/1.",
   {
     pageId: {
       type: "string",
@@ -567,7 +567,7 @@ server.tool(
 // Tool for downloading page content to a file
 server.tool(
   "downloadFile",
-  "Download page content to a specified file path. Skips pages with 'private' or '(old)' in title, or pages last modified before 2022/1/1.",
+  "Download page content to a specified file path. Skips pages with 'private' or '(old)' in title, or pages last modified before 2016/1/1.",
   {
     pageId: {
       type: "string",

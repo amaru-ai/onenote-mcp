@@ -58,7 +58,7 @@ function shouldSkipPageByTitle(title) {
 function shouldSkipByDate(page) {
   if (page.lastModifiedDateTime) {
     const lastModified = new Date(page.lastModifiedDateTime);
-    const cutoffDate = new Date('2022-01-01');
+    const cutoffDate = new Date('2016-01-01');
     return lastModified < cutoffDate;
   }
   return false;
@@ -94,18 +94,12 @@ function hasRecentFileByTitle(pageTitle, fastModeDays = FAST_MODE_DAYS) {
 
   for (const file of files) {
     if (pattern.test(file)) {
-      // Extract date from filename
-      const dateMatch = file.match(/--(\d{8})\.html$/);
-      if (dateMatch) {
-        const dateStr = dateMatch[1];
-        const year = parseInt(dateStr.substring(0, 4));
-        const month = parseInt(dateStr.substring(4, 6)) - 1;
-        const day = parseInt(dateStr.substring(6, 8));
-        const fileDate = new Date(year, month, day);
+      // Check the file's modification time on the local filesystem
+      const filePath = path.join(OUTPUT_DIR, file);
+      const stats = fs.statSync(filePath);
 
-        if (fileDate >= cutoffDate) {
-          return { found: true, filename: file, date: fileDate };
-        }
+      if (stats.mtime >= cutoffDate) {
+        return { found: true, filename: file, date: stats.mtime };
       }
     }
   }
@@ -123,7 +117,7 @@ async function downloadPage(pageId, pageTitle, options = {}) {
       const recentFile = hasRecentFileByTitle(pageTitle);
       if (recentFile.found) {
         console.log(`  ⏭️  Fast mode: Recent file exists (${recentFile.filename})`);
-        return { success: true, skipped: true, reason: 'fast mode - recent file exists' };
+        return { success: true, skipped: true, reason: 'fast mode - recent file exists', madeApiCall: false };
       }
     }
 
@@ -134,8 +128,8 @@ async function downloadPage(pageId, pageTitle, options = {}) {
 
     // Check if should skip by date
     if (shouldSkipByDate(page)) {
-      console.log(`  ⏭️  Skipped (last modified before 2022-01-01): ${pageTitle}`);
-      return { success: true, skipped: true, reason: 'old date' };
+      console.log(`  ⏭️  Skipped (last modified before 2016-01-01): ${pageTitle}`);
+      return { success: true, skipped: true, reason: 'old date', madeApiCall: true };
     }
 
     // Create filename with sanitized title and formatted date
@@ -147,7 +141,7 @@ async function downloadPage(pageId, pageTitle, options = {}) {
     // Check if file already exists
     if (fs.existsSync(filePath)) {
       console.log(`  ⏭️  Already exists: ${filename}`);
-      return { success: true, skipped: true, reason: 'already exists' };
+      return { success: true, skipped: true, reason: 'already exists', madeApiCall: true };
     }
 
     // Download page content
@@ -178,14 +172,14 @@ async function downloadPage(pageId, pageTitle, options = {}) {
     fs.writeFileSync(filePath, content, 'utf8');
     console.log(`  ✅ Downloaded: ${filename} (${content.length} chars)`);
 
-    return { success: true, skipped: false, filename };
+    return { success: true, skipped: false, filename, madeApiCall: true };
   } catch (error) {
     if (retryCount < 1) {
       console.log(`  ⚠️  Error, retrying: ${error.message}`);
       return await downloadPage(pageId, pageTitle, { fastMode, retryCount: retryCount + 1 });
     } else {
       console.log(`  ❌ Failed after retry: ${error.message}`);
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, madeApiCall: true };
     }
   }
 }
@@ -258,8 +252,10 @@ async function main() {
       }
     }
 
-    // Small delay to avoid rate limiting
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Small delay to avoid rate limiting, but only if we made an API call
+    if (result.madeApiCall) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
   }
 
   // Write failed downloads to file
@@ -275,7 +271,7 @@ async function main() {
   console.log('=== Summary ===');
   console.log(`Total pages in list: ${pages.length}`);
   console.log(`Skipped by title (old/private): ${skippedByTitle}`);
-  console.log(`Skipped by date (before 2022-01-01): ${totalSkipped}`);
+  console.log(`Skipped by date (before 2016-01-01): ${totalSkipped}`);
   console.log(`Successfully downloaded: ${totalSuccess}`);
   console.log(`Failed: ${totalFailed}`);
 }
